@@ -3,6 +3,15 @@
   <groupId>BoardTemplate</groupId>
   <artifactId>BoardTemplate</artifactId>
   <version>0.0.1-SNAPSHOT</version>
+
+  <dependencies>
+    <dependency>
+      <groupId>ChessCommon</groupId>
+      <artifactId>ChessCommon</artifactId>
+      <version>0.0.1-SNAPSHOT</version>
+    </dependency>
+  </dependencies>
+
   <build>
     <sourceDirectory>BoardTemplate</sourceDirectory>
     <resources>
@@ -23,11 +32,5 @@
       </plugin>
     </plugins>
   </build>
-  <dependencies>
-  	<dependency>
-  		<groupId>the</groupId>
-  		<artifactId>test4</artifactId>
-  		<version>0.0.1-SNAPSHOT</version>
-  	</dependency>
-  </dependencies>
+
 </project>

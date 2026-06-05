@@ -13,15 +13,12 @@ import java.awt.event.MouseMotionListener;
 import java.awt.event.MouseWheelEvent;
 import java.awt.event.MouseWheelListener;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.ArrayList;
 
-import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
@@ -32,7 +29,6 @@ import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
 
-import test4.LegalMoveLibrary;
 
 public class BoardMain {
 
@@ -211,6 +207,7 @@ public class BoardMain {
 			if(isGameOver) {
 				BoardUtils.create_a_eight_by_eight_of_tiles();
 				BoardUtils.populateBoard();
+				BoardUtils.isWhiteTurn = true;   // fresh board: white always moves first
 				consecutiveTimeoutsWhite=0;
 				consecutiveTimeoutsBlack=0;
 				totalTurnCount=0;
