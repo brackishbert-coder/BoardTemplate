@@ -113,10 +113,21 @@ public class BoardMain {
 	private static final int MAX_TIMEOUTS = 3;      // 3 per player = lose
 	private static final int MAX_TURNS = 50;        // global game cap
 	private static final long TURN_TIME_LIMIT_MS = 100000; // 10 seconds per move (example)
+	// Pace between moves. Was human-paced (hundreds of ms); for computer-vs-computer
+	// drop it low. Raise it back up if you want to watch a game at a leisurely pace.
+	private static final int STEP_DELAY_MS = 50;
 	private static long turnStartTime = System.currentTimeMillis();
 
 	private static JButton nextTurnButton;
 	private static tile selectedTile = null;
+
+	// --- Game mode: watch the AI play itself, or play a side against the AI. ---
+	// The human side reads its move from a click (pendingHumanMove); the AI side
+	// keeps reading the vector pipeline. WATCH is the original AI-vs-AI behaviour.
+	enum PlayMode { WATCH, PLAY_WHITE, PLAY_BLACK }
+	private static volatile PlayMode playMode = PlayMode.WATCH;
+	private static volatile double[] pendingHumanMove = null;  // set by a click, consumed by the loop
+	private static tile humanSelected = null;                  // first click of a two-click move
 	static MouseMotionListener mouseListen = new MouseMotionListener() {
 
 		@Override
@@ -197,6 +208,18 @@ public class BoardMain {
 		// Add the button to your frame/panel (assuming you use BorderLayout)
 		displaysStatsAboutRunningScenario.add(nextTurnButton, BorderLayout.SOUTH);
 
+		// Game-mode controls: watch the AI play itself, or play a side against it.
+		// Switching takes effect immediately (and clears any half-made click).
+		JPanel modePanel = new JPanel();
+		JButton watchBtn = new JButton("Watch (AI vs AI)");
+		JButton whiteBtn = new JButton("Play White");
+		JButton blackBtn = new JButton("Play Black");
+		watchBtn.addActionListener(e -> { playMode = PlayMode.WATCH;      humanSelected = null; pendingHumanMove = null; System.out.println("Mode: WATCH"); });
+		whiteBtn.addActionListener(e -> { playMode = PlayMode.PLAY_WHITE; humanSelected = null; pendingHumanMove = null; System.out.println("Mode: PLAY_WHITE"); });
+		blackBtn.addActionListener(e -> { playMode = PlayMode.PLAY_BLACK; humanSelected = null; pendingHumanMove = null; System.out.println("Mode: PLAY_BLACK"); });
+		modePanel.add(watchBtn); modePanel.add(whiteBtn); modePanel.add(blackBtn);
+		displaysStatsAboutRunningScenario.add(modePanel);
+
 		// Example initialization
 		// Correct back rank order: a–h files
 
@@ -221,23 +244,45 @@ public class BoardMain {
 
 			}
 			try {
-				Thread.sleep(555);
+				Thread.sleep(STEP_DELAY_MS);
 			} catch (InterruptedException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
 			clear_screen();
 
-			calculate_offset_and_print_tiles_in_grid_fassion(currentLocation, initialLocation);
+			// In WATCH mode the board follows the mouse (original behaviour). When a
+			// human is playing, pin it (render at the initial anchor => xOffset/yOffset
+			// = 0) so click coordinates map to tiles stably.
+			Point renderAt = (playMode == PlayMode.WATCH) ? currentLocation : initialLocation;
+			calculate_offset_and_print_tiles_in_grid_fassion(renderAt, initialLocation);
 			frameThatisthedemoyouareWATCHINGNOW.repaint();
-			playNextMove(currentLocation.getX() - initialLocation.getX(),
-					currentLocation.getY() - initialLocation.getY());
+			playNextMove(renderAt.getX() - initialLocation.getX(),
+					renderAt.getY() - initialLocation.getY());
 			frameThatisthedemoyouareWATCHINGNOW.repaint();
 
 		}
 	}
 
+	private static long lastSendMs = 0;
+	private static String lastSentSig = "";
+
+	private static String boardSig() {
+		StringBuilder sb = new StringBuilder();
+		java.util.ArrayList<tile> ts = BoardUtils.getTiles();
+		if (ts != null) for (tile t : ts) sb.append(t.getPiece());
+		sb.append(BoardUtils.isWhiteTurn ? 'W' : 'B');
+		return sb.toString();
+	}
+
 	private static void sendTiles() {
+		// Throttle: only push the board to test4 when it actually changes (or every ~100ms).
+		// The fast poll loop was opening ~400 sockets/sec here, exhausting ports and stalling moves.
+		long nowSend = System.currentTimeMillis();
+		String sig = boardSig();
+		if (sig.equals(lastSentSig) && nowSend - lastSendMs < 100) return;
+		lastSentSig = sig; lastSendMs = nowSend;
+
 
 		
 		
@@ -289,6 +334,7 @@ public class BoardMain {
 
 
 private static void checkEndConditions() {
+    if (isGameOver) return;   // this game's result is already recorded — don't re-register / double-count
     boolean inCheck = BoardUtils.isKingInCheck(BoardUtils.isWhiteTurn);
     boolean hasMoves = LegalMoveLibrary.hasAnyLegalMoves(BoardUtils.isWhiteTurn);
 
@@ -425,7 +471,8 @@ public static boolean hasAnyLegalMoves(boolean isWhite) {
 				sendTiles();
 				LegalMoveLibrary.setBoard(BoardUtils.tiles);
 
-				double[] f = clientVectorizer.getFeatureVector();
+				double[] f = (playMode == PlayMode.PLAY_WHITE)
+						? takeHumanMove() : clientVectorizer.getFeatureVector();
 				System.out.println("Received vector in white section: " + f[0] + "," + f[1] + " -> " + f[2] + "," + f[3]+" legal: "+VectorMoveValidator.isLegalMove(f, false)+" isWhite: "+BoardUtils.isWhitePiece(f));
 				if (VectorMoveValidator.isLegalMove(f, false) && BoardUtils.isWhitePiece(f)) {
 					char piece = getPieceAtStart(true, f); // helper we’ll define below
@@ -452,7 +499,7 @@ public static boolean hasAnyLegalMoves(boolean isWhite) {
 					break;
 				}
 				try {
-					Thread.sleep(500);
+					Thread.sleep(STEP_DELAY_MS);
 				} catch (InterruptedException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
@@ -472,7 +519,8 @@ public static boolean hasAnyLegalMoves(boolean isWhite) {
 				sendTiles();
 				LegalMoveLibrary.setBoard(BoardUtils.tiles);
 
-				double[] f = clientVectorizer.getFeatureVector();
+				double[] f = (playMode == PlayMode.PLAY_BLACK)
+						? takeHumanMove() : clientVectorizer.getFeatureVector();
 				System.out.println("Received vector in black section: " + f[0] + "," + f[1] + " -> " + f[2] + "," + f[3]+" legal: "+VectorMoveValidator.isLegalMove(f, false)+" isBlack: "+BoardUtils.isBlackPiece(f));
 				if (VectorMoveValidator.isLegalMove(f, false) && BoardUtils.isBlackPiece(f)) {
 					char piece = getPieceAtStart(true, f); // helper we’ll define below
@@ -498,7 +546,7 @@ public static boolean hasAnyLegalMoves(boolean isWhite) {
 					break;
 				}
 				try {
-					Thread.sleep(500);
+					Thread.sleep(STEP_DELAY_MS);
 				} catch (InterruptedException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
@@ -584,6 +632,30 @@ public static boolean hasAnyLegalMoves(boolean isWhite) {
 			thespotontheboard.render(PANE_ONE_CHANNEL, displayWidth, displayHeight, new Color(255, 125, 0), xOffset,
 					yOffset);
 		}
+	}
+
+	/** The move for the side the human controls: their last click-move if ready,
+	 *  else the "no move" sentinel so the turn loop keeps polling until they click. */
+	private static double[] takeHumanMove() {
+		double[] m = pendingHumanMove;
+		if (m != null) { pendingHumanMove = null; return m; }
+		return new double[]{ -1, -1, -1, -1 };
+	}
+
+	/** Which board tile a click landed on. A tile at (col,row) is drawn at pixel
+	 *  (col*50 + xOffset, row*50 + yOffset), so invert that. Null if off the board. */
+	private static tile getTileFromClick(MouseEvent e) {
+		int col = (int) Math.floor((e.getX() - xOffset) / 50.0);
+		int row = (int) Math.floor((e.getY() - yOffset) / 50.0);
+		if (col < 0 || col >= 8 || row < 0 || row >= 8) return null;
+		return BoardUtils.getTiles().get(row * 8 + col);
+	}
+
+	/** A normalized move vector [fromCol, fromRow, toCol, toRow] / 7 -- the same
+	 *  format the AI pipeline produces and applyNormalizedVector consumes. */
+	private static double[] toVector(tile from, tile to) {
+		return new double[]{ from.getColumn() / 7.0, from.getRow() / 7.0,
+				to.getColumn() / 7.0, to.getRow() / 7.0 };
 	}
 
 	private static void set_up_display_stuff() {
@@ -705,6 +777,33 @@ public static boolean hasAnyLegalMoves(boolean isWhite) {
 		 * 
 		 * selectedTile = null; frameThatisthedemoyouareWATCHINGNOW.repaint(); } });
 		 */
+		// Click-to-move for the human-controlled side. Two clicks: pick up your own
+		// piece, then click its destination. Ignored in WATCH mode and off-turn. The
+		// move is handed to the turn loop, which validates and applies it (illegal
+		// clicks are simply dropped by the loop's legality check).
+		imageForSeed.addMouseListener(new java.awt.event.MouseAdapter() {
+			@Override public void mouseClicked(MouseEvent e) {
+				boolean humanWhite = (playMode == PlayMode.PLAY_WHITE);
+				boolean humanBlack = (playMode == PlayMode.PLAY_BLACK);
+				if (!humanWhite && !humanBlack) return;
+				if (humanWhite && !BoardUtils.isWhiteTurn) return;
+				if (humanBlack && BoardUtils.isWhiteTurn) return;
+				tile clicked = getTileFromClick(e);
+				if (clicked == null) return;
+				char piece = clicked.getPiece();
+				if (humanSelected == null) {
+					if (piece == '.' || piece == ' ' || piece == '\0') return;
+					if (humanWhite && !Character.isUpperCase(piece)) return;  // white = UPPER-case
+					if (humanBlack && !Character.isLowerCase(piece)) return;  // black = lower-case
+					humanSelected = clicked;
+					System.out.println("Selected " + piece + " at (" + clicked.getColumn() + "," + clicked.getRow() + ")");
+					return;
+				}
+				pendingHumanMove = toVector(humanSelected, clicked);
+				System.out.println("Human move -> (" + clicked.getColumn() + "," + clicked.getRow() + ")");
+				humanSelected = null;
+			}
+		});
 		pane1ThiS_here_stallion_can_get_yo_fo_here_to_to_to_to_to_here.add(imageForSeed);
 
 		System.out.println("flash pixels red green blue random for 3");
